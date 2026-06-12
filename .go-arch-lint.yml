@@ -1,0 +1,234 @@
+version: 3
+workdir: app
+
+allow:
+  depOnAnyVendor: true
+  # Deep scan analyzes method call graphs and flags cross-layer DI wiring
+  # (e.g. testfx passing a security type to a bus middleware constructor).
+  # Component-import rules alone are sufficient — disabling removes false
+  # positives caused by dependency injection wiring.
+  deepScan: false
+
+exclude:
+  - infrastructure/di/**
+
+excludeFiles:
+  - infrastructure/database/migration_manager.go
+  # External `_test` package self-imports the production package for
+  # NewSeeder / SeedAdminPassword — arch-lint flags this as a cycle.
+  - infrastructure/sqlite/seeder/seeder_test.go
+  # Same self-import quirk: audit/repository_test.go is `package audit_test`
+  # importing the audit package to construct *Repository directly.
+  - infrastructure/sqlite/audit/repository_test.go
+  # Same self-import quirk: sqlite_manager_test.go is `package database_test`
+  # importing the database package to drive *SqliteManager from a black-box test.
+  - infrastructure/database/sqlite_manager_test.go
+  # Integration tests that wire real fixtures (testfx) / black-box self-import to
+  # exercise production behavior end-to-end. Same sanctioned test-only exception
+  # as the entries above — these files are tests, never imported by production.
+  - application/bus/middleware/zz_audit_test.go
+  - infrastructure/database/zz_audit_test.go
+  - presentation/console/zz_audit_test.go
+  - presentation/http/server/zz_audit_test.go
+  # Gap-closure black-box / fixture-wired tests from the curated coverage pass —
+  # same test-only rationale (build a full server / run migrations / wire testfx).
+  - infrastructure/database/zz_gap_test.go
+  - presentation/console/zz_gap_test.go
+  - presentation/http/server/zz_gap_test.go
+  - app/zz_gap_test.go
+  # `package domain_test` living in the bare domain/ dir (parent of the bounded
+  # contexts) — self-walking tests that re-assert the layer rule; match no
+  # component's `in:` glob, so attach-exempt them.
+  - domain/zz_audit_test.go
+  - domain/zz_gap_test.go
+
+# Only shared/ is common (AuthClaims, errors, ports). The bounded contexts
+# (user/token/job) are NOT common, so importing one from another is a
+# component-rule violation — this is what enforces "no cross-context imports".
+commonComponents:
+  - domain_shared
+
+components:
+  # Root
+  app:
+    in: .
+
+  # Layer 1: Domain — split per bounded context so cross-context imports
+  # (e.g. domain/user -> domain/token) are caught instead of hidden inside one
+  # `domain/**` component.
+  domain_shared:
+    in: domain/shared/**
+  domain_user:
+    in: domain/user/**
+  domain_token:
+    in: domain/token/**
+  domain_job:
+    in: domain/job/**
+
+  # Layer 2: Application
+  bus:
+    in: application/bus
+  bus_middleware:
+    in: application/bus/middleware/**
+  application:
+    in: application/**
+  # Matches any `testfx/` directory anywhere in the tree (e.g. application/auth/command/internal/testfx/).
+  # Fixtures may wire real infrastructure — production code can import them from *_test.go files only.
+  testfx:
+    in: '**/testfx/**'
+
+  # Layer 3: Infrastructure
+  config:
+    in: infrastructure/config/**
+  database:
+    in: infrastructure/database
+  security:
+    in: infrastructure/security/**
+  sqlite_base:
+    in: infrastructure/sqlite
+  sqlite_repos:
+    in:
+      - infrastructure/sqlite/audit/**
+      - infrastructure/sqlite/job/**
+      - infrastructure/sqlite/token/**
+      - infrastructure/sqlite/user/**
+  sqlite_seeder:
+    in: infrastructure/sqlite/seeder/**
+  scheduler:
+    in: infrastructure/scheduler/**
+  worker:
+    in: infrastructure/worker/**
+
+  # Layer 4: Presentation
+  handler:
+    in: presentation/http/handler/**
+  http_middleware:
+    in: presentation/http/middleware/**
+  request:
+    in: presentation/http/request/**
+  response:
+    in: presentation/http/response/**
+  server:
+    in: presentation/http/server/**
+  console:
+    in: presentation/console/**
+
+deps:
+  # Root — orchestration
+  app:
+    mayDependOn:
+      - bus
+      - database
+      - security
+      - sqlite_base
+      - console
+
+  # Domain — pure core. Each bounded context may use domain_shared (common)
+  # and vendor (uuid) but NOT another context. No mayDependOn between them is
+  # the enforcement.
+  domain_shared:
+    anyVendorDeps: true
+  domain_user:
+    anyVendorDeps: true
+  domain_token:
+    anyVendorDeps: true
+  domain_job:
+    anyVendorDeps: true
+
+  # Application — depends on domain only
+  bus:
+    anyVendorDeps: true
+  bus_middleware:
+    mayDependOn:
+      - bus
+  application:
+    mayDependOn:
+      - testfx
+      - domain_user
+      - domain_token
+      - domain_job
+    anyVendorDeps: true
+
+  # Test fixtures — may wire real infrastructure for integration tests.
+  # Any layer that has tests can import them.
+  testfx:
+    mayDependOn:
+      - bus
+      - bus_middleware
+      - database
+      - security
+      - config
+      - sqlite_base
+      - sqlite_repos
+      - domain_user
+      - domain_token
+      - domain_job
+    anyVendorDeps: true
+
+  # Infrastructure — depends on domain
+  config:
+    anyVendorDeps: true
+  database:
+    mayDependOn:
+      - config
+  security:
+    mayDependOn:
+      - config
+  sqlite_base:
+    mayDependOn:
+      - database
+  sqlite_repos:
+    mayDependOn:
+      - sqlite_base
+      - database
+      - testfx
+      - domain_user
+      - domain_token
+      - domain_job
+  sqlite_seeder:
+    mayDependOn:
+      - database
+      - testfx
+      - domain_user
+  scheduler:
+    anyVendorDeps: true
+  worker:
+    mayDependOn:
+      - application
+      - testfx
+      - domain_user
+      - domain_job
+    anyVendorDeps: true
+
+  # Presentation — depends on application + infrastructure
+  handler:
+    mayDependOn:
+      - application
+      - bus
+      - request
+      - response
+      - testfx
+      - domain_user
+  request:
+    anyVendorDeps: true
+  http_middleware:
+    mayDependOn:
+      - security
+      - response
+      - testfx
+  response:
+    anyVendorDeps: true
+  server:
+    mayDependOn:
+      - handler
+      - http_middleware
+      - config
+  console:
+    mayDependOn:
+      - server
+      - scheduler
+      - worker
+      - config
+      - database
+      - application
+      - bus
