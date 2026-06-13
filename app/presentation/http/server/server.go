@@ -105,6 +105,13 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.limiters.Login.Run(ctx, janitorSweepInterval, janitorDropAfter)
 	go s.limiters.Refresh.Run(ctx, janitorSweepInterval, janitorDropAfter)
 
+	if s.config.SentryDebug {
+		s.logger.Warn(
+			"sentry debug mode ENABLED — GET /debug/sentry panics on demand and " +
+				"the SPA exposes an error trigger; do NOT enable in production",
+		)
+	}
+
 	addr := ":" + s.config.HTTPPort
 	s.logger.Info("server: starting", logKeyAddr, addr)
 	return runWithShutdown(
@@ -174,12 +181,14 @@ func (s *Server) registerRoutes() *http.ServeMux {
 	refreshLimit := s.limiters.Refresh.Middleware()
 	mux.HandleFunc("GET /health", s.health.Check)
 
-	// TEMPORARY (E2E test only) — deliberate panic to exercise the
-	// RecoveryMiddleware → Sentry error-reporting path on the live server.
-	// Remove before any real use; exists only in the throwaway e2e repo.
-	mux.HandleFunc("GET /debug/boom", func(_ http.ResponseWriter, _ *http.Request) {
-		panic("e2e: deliberate Sentry test panic")
-	})
+	// Sentry debug trigger — registered only when APP_SENTRY_DEBUG is on. The
+	// deliberate panic exercises RecoveryMiddleware → ErrorReporter so backend
+	// Sentry can be verified end-to-end on a live deploy. Never enable in prod.
+	if s.config.SentryDebug {
+		mux.HandleFunc("GET /debug/sentry", func(_ http.ResponseWriter, _ *http.Request) {
+			panic("sentry debug: deliberate backend test panic (APP_SENTRY_DEBUG)")
+		})
+	}
 
 	mux.Handle("POST /api/v1/auth/login", loginLimit(http.HandlerFunc(s.auth.Login)))
 	mux.Handle("POST /api/v1/auth/refresh", refreshLimit(http.HandlerFunc(s.auth.Refresh)))
@@ -218,7 +227,7 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 		middleware.TraceMiddleware(),
 		middleware.RecoveryMiddleware(s.logger, s.reporter),
 		middleware.IPMiddleware(s.ipExtract),
-		middleware.SecurityHeadersMiddleware(s.config.CookieSecure),
+		middleware.SecurityHeadersMiddleware(s.config.CookieSecure, s.config.FrontendSentryDSN),
 		middleware.CORSMiddleware(s.config.CORSOrigin),
 		csrf.Handler,
 		middleware.LoggingMiddleware(s.logger),
