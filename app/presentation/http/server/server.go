@@ -173,6 +173,14 @@ func (s *Server) registerRoutes() *http.ServeMux {
 	loginLimit := s.limiters.Login.Middleware()
 	refreshLimit := s.limiters.Refresh.Middleware()
 	mux.HandleFunc("GET /health", s.health.Check)
+
+	// TEMPORARY (E2E test only) — deliberate panic to exercise the
+	// RecoveryMiddleware → Sentry error-reporting path on the live server.
+	// Remove before any real use; exists only in the throwaway e2e repo.
+	mux.HandleFunc("GET /debug/boom", func(_ http.ResponseWriter, _ *http.Request) {
+		panic("e2e: deliberate Sentry test panic")
+	})
+
 	mux.Handle("POST /api/v1/auth/login", loginLimit(http.HandlerFunc(s.auth.Login)))
 	mux.Handle("POST /api/v1/auth/refresh", refreshLimit(http.HandlerFunc(s.auth.Refresh)))
 
