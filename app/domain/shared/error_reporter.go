@@ -17,6 +17,12 @@ type ErrorReporter interface {
 	// Capture reports err, tagged with the ctx correlation attributes plus the
 	// given attrs. Best-effort and non-blocking — it must never fail a request.
 	Capture(ctx context.Context, err error, attrs ...slog.Attr)
+	// WithRequestScope returns a context carrying a fresh per-request reporting
+	// scope. Breadcrumbs (the structured-log lines emitted while handling the
+	// request or job) then accumulate on that scope, so a later Capture on the
+	// same context includes the trail leading up to the failure. Call it once at
+	// the start of each request/job. The no-op reporter returns ctx unchanged.
+	WithRequestScope(ctx context.Context) context.Context
 	// Flush blocks up to timeout for buffered events to be delivered. Call it
 	// before process exit (incl. panic unwinding) so reports aren't lost.
 	Flush(timeout time.Duration) bool
@@ -28,4 +34,20 @@ type NopReporter struct{}
 
 func (NopReporter) Capture(context.Context, error, ...slog.Attr) {}
 
+func (NopReporter) WithRequestScope(ctx context.Context) context.Context { return ctx }
+
 func (NopReporter) Flush(time.Duration) bool { return true }
+
+// PanicError wraps a recovered panic value so the error reporter can label it
+// distinctly. A plain fmt.Errorf would type every panic as *errors.errorString
+// in the tracker; carrying the original value lets the Sentry adapter set a
+// meaningful exception type ("panic") and tag the concrete Go type of the panic
+// (string vs runtime.Error, …). The two recovery middlewares (bus, HTTP) wrap
+// recovered panics in this; ordinary returned errors and terminal job failures
+// do NOT — they are not panics. This is a plain domain type, no Sentry import.
+type PanicError struct {
+	Value   any    // the recovered panic value (preserves the concrete type)
+	Message string // formatted context, e.g. "http: panic in GET /x: <value>"
+}
+
+func (e *PanicError) Error() string { return e.Message }

@@ -55,6 +55,8 @@ Server používá stdlib `net/http.ServeMux` s Go 1.22+ pattern routingem. Routy
 
 Catch-all `GET /{path...}` vrací soubory z embedovaného `public.FS`. Neexistující cesty vrátí `index.html` -- o routing rozhoduje Vue Router na klientu.
 
+Při servírování `index.html` do něj `SPAHandler` **injektuje runtime config** jako `<meta name="gokick:…">` tagy (Sentry DSN, environment, debug flag) -- jeden buildnutý image tak může běžet ve více prostředích bez rebuildu. SPA je čte přes `runtimeConfig.ts`. Detail viz [Sentry guide](/guides/sentry) + [Config → Sentry](/framework/infrastructure/config#sentry).
+
 ### Vite dev proxy
 
 Při vývoji frontend běží na Vite dev serveru (`yarn dev`). Proxy směruje API cesty, health check a favicon na Go backend:
@@ -140,4 +142,5 @@ Pokud handler trvá déle než 30s, `Shutdown` vrátí `context.DeadlineExceeded
 
 - Domain error typy (`ValidationError` 400, `AuthError` 401, `PermissionError` 403) implementují `HTTPError` implicitně (duck typing). Žádný import mezi `response/` a `domain/`. Detaily viz [Errors & Events](/framework/domain/errors-events).
 - Server struct drží konfiguraci, logger, JWT service, rate-limitery, IP extractor a HTTP handlery -- **ne** `*http.ServeMux` ani middleware chain. Ty se staví per-call uvnitř `Start`: `registerRoutes()` vrátí lokální `*http.ServeMux` a `buildMiddlewareChain()` ho obalí. `Start(ctx)` pak spustí `http.Server.ListenAndServe` v goroutině a čeká na `ctx.Done()` nebo server error (viz [Graceful shutdown](#graceful-shutdown)).
+- **Pořadí v `buildMiddlewareChain` je invariant:** `Trace → IP → Recovery → Security → CORS → CSRF → Logging`. `Trace` a `IP` jsou čisté context-settery (jen razítkují ctx, nikdy neselžou), takže běží **před** `Recovery` schválně — každý panic report tím nese `trace_id` i klientskou IP (Sentry capture čte IP z ctx). Přehození `IP` za `Recovery` by tichounce shodilo `user.ip_address` na zachycených panikách; hlídá to regresní test proti `buildMiddlewareChain`.
 - Response balíček nemá žádné závislosti kromě stdlib.
