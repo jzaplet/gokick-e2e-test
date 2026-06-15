@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import App from '@/App.vue';
 import { router } from '@/router';
 import { refresh } from '@/app-ui/Auth/refresh';
+import { hasSessionHint } from '@/app-ui/Auth/sessionHint';
 import { initSentry } from '@/app-ui/Sentry/initSentry';
 import '@/tailwind.css';
 import '@/img/go-vue-cqrs-ddd.png';
@@ -19,7 +20,18 @@ export const bootstrap = async (): Promise<void> => {
     // mount are captured too (no-op without VITE_SENTRY_DSN).
     initSentry(app);
 
-    await refresh();
+    // Only attempt the cookie-based restore when the readable hint says a
+    // session plausibly exists — a guest skips it (and its guaranteed 401).
+    // Defensive try/catch: refresh() is written to never throw, but bootstrap
+    // MUST mount the app no matter what — a future regression (or any unexpected
+    // throw) degrades to the guest path instead of leaving a blank page.
+    try {
+        if (hasSessionHint() === true) {
+            await refresh();
+        }
+    } catch {
+        // Ignore — fall through to mount as a guest.
+    }
 
     app.use(router).mount('#app');
 };

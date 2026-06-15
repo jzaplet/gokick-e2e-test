@@ -57,9 +57,12 @@ describe('app bootstrap', () => {
         // Wipe the calls recorded by the import-time `void bootstrap()` so each
         // test asserts against a clean explicit invocation.
         vi.clearAllMocks();
+        // Start each test with no session hint, then opt in where needed.
+        document.cookie = 'gk_session=; Path=/; Max-Age=0';
     });
 
-    it('calls refresh() before mounting the app', async (): Promise<void> => {
+    it('restores the session before mounting when a session hint is present', async (): Promise<void> => {
+        document.cookie = 'gk_session=1; Path=/';
         await bootstrap();
 
         expect(refreshMock).toHaveBeenCalledTimes(1);
@@ -75,12 +78,35 @@ describe('app bootstrap', () => {
         expect(Number(refreshOrder)).toBeLessThan(Number(mountOrder));
     });
 
+    it('skips the restore for a guest (no session hint) but still mounts', async (): Promise<void> => {
+        // No gk_session cookie (cleared in beforeEach) — a brand-new visitor.
+        await bootstrap();
+
+        expect(refreshMock).not.toHaveBeenCalled();
+        expect(mountMock).toHaveBeenCalledTimes(1);
+        expect(mountMock).toHaveBeenCalledWith('#app');
+    });
+
     it('mounts the created app onto #app', async (): Promise<void> => {
         await bootstrap();
 
         // createApp(App).use(router).mount('#app') — the full chain ran.
         expect(createAppMock).toHaveBeenCalledTimes(1);
         expect(useMock).toHaveBeenCalledTimes(1);
+        expect(mountMock).toHaveBeenCalledWith('#app');
+    });
+
+    // code-review finding #2: bootstrap must mount no matter what — even if
+    // refresh() throws (offline / DNS / a future regression) it degrades to the
+    // guest path instead of leaving a blank page.
+    it('still mounts when the session restore throws', async (): Promise<void> => {
+        document.cookie = 'gk_session=1; Path=/';
+        refreshMock.mockRejectedValueOnce(new Error('offline'));
+
+        await bootstrap();
+
+        expect(refreshMock).toHaveBeenCalledTimes(1);
+        expect(mountMock).toHaveBeenCalledTimes(1);
         expect(mountMock).toHaveBeenCalledWith('#app');
     });
 });

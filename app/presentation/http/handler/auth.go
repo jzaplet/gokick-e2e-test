@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -16,6 +17,15 @@ const refreshCookieName = "refresh_token"
 
 // Path under which the refresh cookie is valid — limits exposure to just the auth endpoints.
 const refreshCookiePath = "/api/v1/auth"
+
+// sessionHintCookieName is a NON-HttpOnly, no-secret flag ("1") set alongside
+// the refresh cookie with the same lifetime. The SPA can't read the HttpOnly
+// refresh cookie, so on bootstrap it would otherwise always POST /auth/refresh —
+// a guaranteed 401 (and a wasted request) for every guest. With this readable
+// hint the SPA only attempts the restore when a session plausibly exists. The
+// server owns it (same Expires as the refresh cookie) so it never drifts into a
+// false negative that would log a real session out.
+const sessionHintCookieName = "gk_session"
 
 type AuthHandler struct {
 	cookieSecure bool
@@ -115,7 +125,15 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		h.clearRefreshCookie(w)
+		// Only drop the session cookies when the refresh token itself is
+		// invalid/revoked/expired (an auth-class failure → 401). A transient
+		// error (DB blip → 5xx) must NOT log the user out: keep the cookie so
+		// the next attempt can still succeed instead of forcing a re-login from
+		// a momentary backend hiccup.
+		var authErr *shared.AuthError
+		if errors.As(err, &authErr) {
+			h.clearRefreshCookie(w)
+		}
 		response.HandleError(w, err)
 
 		return
@@ -156,6 +174,17 @@ func (h *AuthHandler) writeAuthResponse(w http.ResponseWriter, result authcmd.Lo
 		SameSite: http.SameSiteStrictMode,
 		Expires:  result.RefreshExpiresAt,
 	})
+	// Readable session hint at Path=/ so the SPA bootstrap can see it (NOT
+	// HttpOnly, carries no secret). Same Expires as the refresh cookie above.
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionHintCookieName,
+		Value:    "1",
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  result.RefreshExpiresAt,
+	})
 
 	response.JSON(w, http.StatusOK, loginResponse{
 		AccessToken:      result.AccessToken,
@@ -180,6 +209,17 @@ func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
 		Value:    "",
 		Path:     refreshCookiePath,
 		HttpOnly: true,
+		Secure:   h.cookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+	// Clear the session hint in lock-step (must match its Path=/ to delete it).
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionHintCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: false,
 		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,

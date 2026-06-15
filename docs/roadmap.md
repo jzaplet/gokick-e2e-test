@@ -274,15 +274,19 @@ Až aplikace začne jezdit v produkci. Bez F1–F3 by observabilita měřila nes
 - [x] **Sentry — produkční hardening + obohacení** — Hotovo (2026-06-14, E2E test šablony přes reálnou prod pipeline; [gokick PR #11](https://github.com/jzaplet/gokick/pull/11)). Ověřeno na živém deploy.
   - **FE Sentry v prod** — `VITE_SENTRY_DSN` je build-time, takže prod image (buildnutý jednou) ho neměl → FE Sentry byl tmavý. Nově server injektuje FE config (`APP_SENTRY_DSN_FRONTEND`, environment, debug) do `index.html` jako `<meta>` tagy, SPA čte runtime (`runtimeConfig.ts`); CSP `connect-src` se otevře na ingest origin.
   - **Reálná klientská IP** — `IPExtractor` čte `CF-Connecting-IP` (→ `X-Real-IP` → `RemoteAddr`); IP v access logu i na panic logu. Dokumentován **Cloudflare origin-lock** ([Config](/framework/infrastructure/config#app_trust_proxy_headers--cloudflare-origin-lock)).
-  - **Obohacení eventu** — User (id/nickname/role + IP, `user.ip_address`) + Request (method/url/User-Agent z whitelistu, nikdy syrové hlavičky); `SendDefaultPII:true`. Access log + `status`/`bytes`. Klíče `method`/`path`/`url`/`user_agent` povýšeny do `shared.LogKey*`.
+  - **Obohacení eventu** — User (id/nickname/role/email + IP, `user.ip_address`) + Request (method/url/User-Agent + credential hlavičky `Authorization`/`Cookie` **maskované**, `Bearer ==MASKED==`); `SendDefaultPII:true`. Access log + `status`/`bytes`. Klíče `method`/`path`/`url`/`user_agent` povýšeny do `shared.LogKey*`.
   - **Oprava pořadí middleware** — `Trace → IP → Recovery` (IP před Recovery), aby HTTP-recovery capture nesl klientskou IP. Regresní test proti `buildMiddlewareChain`.
   - **`APP_SENTRY_DEBUG`** — gated BE `/debug/sentry` panika + FE tlačítko pro smoke-test. Návod: [Sentry guide](/guides/sentry).
   - **Kvalita eventu (2. kolo)** — paniky mají typ `panic` (místo `*errors.errorString`) + culprit na reálném místě (`in_app` degradace reporting framů) přes `shared.PanicError`; BE eventy nesou **breadcrumbs** (per-request hub + `breadcrumbHandler` nad slog → trail `INFO+` logů, jako Symfony); FE **source maps** přes `@sentry/vite-plugin` (upload + smazání z dist, debug-ID, opt-in `SENTRY_AUTH_TOKEN`). Vše ověřeno BeforeSend integračními testy.
+  - **Code-review fixes (3. kolo)** — durable-logout bug fix (session-hint `gk_session` se maže jen na logout + 401, ne na transientní 5xx — FE i server); BE email v Sentry user (přes JWT claims); vícevrstvé **maskování** credential hlaviček + breadcrumb scrubber (`shared/mask.go` + `BeforeSend`/`BeforeBreadcrumb`); worker paniky typ `panic` + per-`job_kind` fingerprint; `statusRecorder` `io.ReaderFrom` (statický fast-path); breadcrumb akumuluje `With`-bound attrs; robustní `<head>` injekce; gating breadcrumb wrapu bez DSN. Ověřeno lokálním gate (lint, arch, `go test -race`, vitest); session-hint + maskování zatím ne na živém deploy.
 
 - [ ] **OpenTelemetry (volitelně, později)**
   - Až bude nasazená alespoň jedna další služba (database proxy, search backend, atd.). Pro standalone monolit přidává komplexitu bez návratnosti.
   - OTel HTTP middleware + propagace přes bus middleware. `traceID` v contextu může přejít na `trace.SpanContext`.
   - Pro tracing job workeru: span per job s `kind` a `attempts` jako atributy.
+  - **SQL viditelnost sem patří** (rozhodnuto 2026-06-15): `otelsql` obalí DB driver → span per dotaz (text + trvání), surfacováno v traces i na Sentry erroru. Proto se **nestaví bespoke „SQL → breadcrumb" most** — byla by to throwaway práce, kterou OTel nahradí.
+
+- [ ] **BE source context u Sentry framu (volitelné, mimo OTel)** — Go trace je už čitelný (`file:func:line`), chybí jen inline snippet zdrojáku. Řeší **Sentry GitHub integrace** (code mapping → „Open in GitHub" + source z repa, **nic na prod**), ne OTel a ne shipování zdrojáku do image. Low priority — `file:line` k navigaci stačí. (Rozhodnuto 2026-06-15.)
 
 
 ## Co je už hotové

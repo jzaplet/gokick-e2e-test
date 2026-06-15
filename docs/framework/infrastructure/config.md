@@ -78,7 +78,7 @@ func LoadConfig() (*Config, error)
 | `APP_RATE_LIMIT_REFRESH` | `60/min` | Per-IP limit na `/auth/refresh` (prázdné = vypnuto) |
 | `APP_SENTRY_DSN` | -- | Backend Sentry DSN (prázdné = vypnuto). Čteno v `cmd/`, **ne** v Config struct |
 | `APP_SENTRY_DSN_FRONTEND` | -- | Frontend Sentry DSN — server ho injektuje do `index.html` jako `<meta>` tag |
-| `APP_SENTRY_ENVIRONMENT` | `development` | Sentry environment, sdílené BE i FE |
+| `APP_SENTRY_ENVIRONMENT` | `development` | Sentry environment, sdílené BE i FE. Když je DSN nastavený a tahle prázdná, appka při startu **varuje** (eventy by jinak tiše spadly pod `development`) |
 | `APP_SENTRY_RELEASE` | (git tag) | Override release verze pro Sentry (jinak z git tagu při buildu). Čteno v `cmd/` |
 | `APP_SENTRY_DEBUG` | `false` | Záměrné error triggery pro smoke-test Sentry. **Nikdy v produkci** |
 
@@ -97,7 +97,7 @@ func LoadConfig() (*Config, error)
 
 V `.env.example` je `false` kvůli dev workflow. V produkci **vždy** `true` + nasazení za TLS terminátor.
 
-Ostatní flagy cookie jsou hardcoded, protože nemá smysl je měnit: `HttpOnly=true` (nepřístupné z JS, obrana proti XSS), `SameSite=Strict` (nepošle se při cross-site requestu, obrana proti CSRF), `Path=/api/v1/auth` (posílá se jen na auth endpointy).
+Ostatní flagy **refresh** cookie jsou hardcoded, protože nemá smysl je měnit: `HttpOnly=true` (nepřístupné z JS, obrana proti XSS), `SameSite=Strict` (nepošle se při cross-site requestu, obrana proti CSRF), `Path=/api/v1/auth` (posílá se jen na auth endpointy). `APP_COOKIE_SECURE` gate-uje `Secure` flag u refresh cookie i u čitelné session-hint cookie `gk_session` (ta je záměrně **ne-`HttpOnly`** a na `Path=/`, nese jen flag `1` — viz [Auth guide](/guides/auth)).
 
 ### APP_TRUST_PROXY_HEADERS & Cloudflare origin-lock
 

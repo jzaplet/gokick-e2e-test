@@ -25,8 +25,14 @@ export const scheduleRefresh = (expiresInMs: number, fn: () => void): void => {
     refreshTimer = setTimeout(fn, delay);
 };
 
-// Wipes every trace of a session — called on logout, refresh failure, and
-// when the 401 retry path ultimately gives up.
+// Wipes every trace of a session — called on logout, refresh failure, and when
+// the 401 retry path ultimately gives up. Deliberately does NOT drop the
+// gk_session hint: clearAuth also runs on transient failures (a 5xx/offline
+// refresh), and clearing the hint there would skip the bootstrap refresh on the
+// next load — turning a momentary backend hiccup into a durable logout even
+// though the refresh cookie is still valid. The hint is cleared only at the
+// definitive end of a session: an explicit logout and a 401 from refresh (see
+// logout.ts / refresh.ts).
 export const clearAuth = (): void => {
     setAccessToken(null);
     user.value = null;
